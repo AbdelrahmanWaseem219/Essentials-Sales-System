@@ -5,8 +5,22 @@ import helmet from 'helmet';
 import { json, raw } from 'express';
 import { AppModule } from './app.module';
 
+// Last-resort safety net: log stray async errors instead of letting Node exit.
+// Nest already turns request-handler errors into HTTP 500s; these handlers stop
+// an unhandled rejection / uncaught exception from a background task (poller,
+// fire-and-forget send, SSE) from taking the whole server down.
+process.on('unhandledRejection', (reason) => {
+  // eslint-disable-next-line no-console
+  console.error('[unhandledRejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  // eslint-disable-next-line no-console
+  console.error('[uncaughtException]', err);
+});
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { rawBody: true });
+  app.enableShutdownHooks(); // clean Prisma/Redis disconnect on SIGTERM/SIGINT
 
   // Webhook routes need the raw body for HMAC verification; everything else JSON.
   app.use('/webhooks', raw({ type: '*/*', limit: '5mb' }));

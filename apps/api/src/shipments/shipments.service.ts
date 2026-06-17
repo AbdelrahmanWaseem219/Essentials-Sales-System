@@ -207,6 +207,7 @@ export class ShipmentsService {
       return;
     }
 
+    const prevStatus = shipment.status;
     const status = mapBostaState(params.state);
     await this.prisma.shipment.update({
       where: { id: shipment.id },
@@ -226,7 +227,12 @@ export class ShipmentsService {
     });
 
     await this.mirrorOrderStatus(shipment.orderId, status);
-    await this.fireMilestoneNotification(shipment.orderId, status);
+    // Only notify the customer when the status actually CHANGED. Repeated webhooks
+    // (Bosta is at-least-once) and location-only poll updates must not re-send the
+    // same "in transit"/"out for delivery" message.
+    if (status !== prevStatus) {
+      await this.fireMilestoneNotification(shipment.orderId, status);
+    }
 
     // Push to the public tracking SSE channel.
     this.realtime.publish(`tracking:${shipment.publicToken}`, {
@@ -257,19 +263,23 @@ export class ShipmentsService {
       select: { trackingNumber: true, status: true, currentLocation: true },
     });
 
-    for (const s of active) {
+    const processOne = async (s: {
+      trackingNumber: string | null;
+      status: ShipmentStatus;
+      currentLocation: string | null;
+    }) => {
       const tracked = await this.bosta.trackDelivery(s.trackingNumber!).catch((e) => {
         this.logger.warn(`Bosta track ${s.trackingNumber} failed: ${e.message}`);
         return null;
       });
       const state = tracked?.state as { value?: string; code?: number } | undefined;
-      if (!state) continue; // no usable state → don't risk downgrading status
+      if (!state) return; // no usable state → don't risk downgrading status
 
       const mapped = mapBostaState(state);
       const location = tracked.currentLocation ?? undefined;
 
-      // Nothing changed since last time → skip (no duplicate events/notifications).
-      if (mapped === s.status && (location ?? null) === (s.currentLocation ?? null)) continue;
+      // Nothing changed since last time → skip (no duplicate events).
+      if (mapped === s.status && (location ?? null) === (s.currentLocation ?? null)) return;
 
       await this.applyTrackingUpdate({
         trackingNumber: s.trackingNumber!,
@@ -277,6 +287,14 @@ export class ShipmentsService {
         location,
         raw: tracked,
       }).catch((e) => this.logger.error(`Apply Bosta update for ${s.trackingNumber} failed: ${e.message}`));
+    };
+
+    // Bounded concurrency: process in small batches so wall-clock scales with
+    // active/CONCURRENCY (not the full count) and one slow Bosta call can't block
+    // the rest or make a tick overrun the poll interval.
+    const CONCURRENCY = 5;
+    for (let i = 0; i < active.length; i += CONCURRENCY) {
+      await Promise.all(active.slice(i, i + CONCURRENCY).map(processOne));
     }
   }
 
