@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
+html {
+  /* Slightly smaller root so the UI reads as a dense, professional admin
+     rather than feeling "zoomed in". */
+  font-size: 15px;
+}
+
+body {
+  @apply bg-slate-50 text-slate-800 antialiased transition-colors duration-200 dark:bg-brand-950 dark:text-slate-200;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Tidy, slim scrollbars */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-slate-300 dark:bg-white/15;
+}
+*::-webkit-scrollbar-thumb:hover {
+  @apply bg-slate-400 dark:bg-white/25;
+}
+
+/* Subtle entrance for page content */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-in {
+  animation: fade-in 0.25s ease-out;
+}

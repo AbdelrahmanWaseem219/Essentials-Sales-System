@@ -1,0 +1,67 @@
+# Production stack — everything needed to run Essentials Sales 24/7 on one server.
+# IMPORTANT: pass --env-file so Compose can interpolate ${POSTGRES_*} below
+# (env_file: only injects vars into a container, NOT into Compose interpolation):
+#   docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+# Fill in .env.prod first (see .env.prod.example).
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: always
+    env_file: .env.prod
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://redis:6379
+      PORT: 4000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose:
+      - "4000"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: always
+    environment:
+      # The web server proxies /api and /track to the API container.
+      API_URL: http://api:4000
+      PORT: 3000
+    depends_on:
+      - api
+    ports:
+      - "80:3000" # serve the app on port 80 (use a reverse proxy for HTTPS)
+
+volumes:
+  pgdata:
+  redisdata:

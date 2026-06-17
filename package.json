@@ -1,0 +1,18 @@
+{
+  "name": "essentials-sales",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Standalone Sales Management System replacing Odoo Sales (uses Odoo Inventory as backend).",
+  "packageManager": "pnpm@9.0.0",
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "api": "pnpm --filter @essentials/api",
+    "web": "pnpm --filter @essentials/web"
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3",
+    "typescript": "^5.5.4"
+  }
+}

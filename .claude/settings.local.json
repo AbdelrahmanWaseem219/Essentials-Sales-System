@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(corepack pnpm *)",
+      "Bash(echo \"TYPECHECK EXIT=$?\")",
+      "PowerShell(corepack pnpm --filter \"@essentials/web\" dev)",
+      "Bash(npx prisma *)"
+    ]
+  }
+}

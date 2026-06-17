@@ -1,0 +1,23 @@
+node_modules/
+dist/
+build/
+.next/
+out/
+coverage/
+*.log
+*.tsbuildinfo
+.seeded
+
+# env — ignore all env files except the *.example templates
+.env
+.env.*
+!.env.example
+!.env.prod.example
+!apps/*/.env.example
+
+# prisma
+apps/api/prisma/*.db
+
+# os
+.DS_Store
+Thumbs.db

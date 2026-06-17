@@ -1,0 +1,2 @@
+# Keeps the public/ directory present so the production Docker build's
+# `COPY apps/web/public` step succeeds. Put static assets (favicon, images) here.
