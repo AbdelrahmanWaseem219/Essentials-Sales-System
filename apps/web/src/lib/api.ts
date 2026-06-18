@@ -3,47 +3,17 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? '/api';
 const TRACK_BASE = process.env.NEXT_PUBLIC_TRACK_BASE ?? '/track-api';
 
-const ACCESS_KEY = 'es_access';
-const REFRESH_KEY = 'es_refresh';
+// Auth is cookie-based: the backend sets httpOnly access/refresh cookies that JS
+// cannot read (XSS-safe). The browser sends them automatically on same-origin
+// requests, so there are no tokens to store or attach here.
 
-export const tokens = {
-  get access() {
-    return typeof window !== 'undefined' ? localStorage.getItem(ACCESS_KEY) : null;
-  },
-  get refresh() {
-    return typeof window !== 'undefined' ? localStorage.getItem(REFRESH_KEY) : null;
-  },
-  set(access: string, refresh: string) {
-    localStorage.setItem(ACCESS_KEY, access);
-    localStorage.setItem(REFRESH_KEY, refresh);
-  },
-  clear() {
-    localStorage.removeItem(ACCESS_KEY);
-    localStorage.removeItem(REFRESH_KEY);
-  },
-};
-
-// Single in-flight refresh shared by all callers. Without this, several parallel
-// requests (e.g. the dashboard's 4 concurrent fetches) each hit a 401 and each POST
-// the SAME refresh token; rotation invalidates it after the first, so the rest fail
-// and spuriously log the user out. Coalescing into one promise fixes that race.
+// Single in-flight refresh shared by all callers, so concurrent 401s don't each
+// rotate the refresh cookie and knock the others out.
 let refreshPromise: Promise<boolean> | null = null;
-
-function refreshTokens(): Promise<boolean> {
+function refreshSession(): Promise<boolean> {
   if (refreshPromise) return refreshPromise;
-  const rt = tokens.refresh;
-  if (!rt) return Promise.resolve(false);
-  refreshPromise = fetch(`${API_BASE}/auth/refresh`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refreshToken: rt }),
-  })
-    .then(async (r) => {
-      if (!r.ok) return false;
-      const data = await r.json();
-      tokens.set(data.accessToken, data.refreshToken);
-      return true;
-    })
+  refreshPromise = fetch(`${API_BASE}/auth/refresh`, { method: 'POST', credentials: 'include' })
+    .then((r) => r.ok)
     .catch(() => false)
     .finally(() => {
       refreshPromise = null;
@@ -54,17 +24,14 @@ function refreshTokens(): Promise<boolean> {
 async function request<T>(path: string, options: RequestInit = {}, retry = true): Promise<T> {
   const headers = new Headers(options.headers);
   headers.set('Content-Type', 'application/json');
-  if (tokens.access) headers.set('Authorization', `Bearer ${tokens.access}`);
 
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: 'include' });
 
-  // Transparent refresh-token rotation on 401 (coalesced across concurrent calls).
-  if (res.status === 401 && retry && tokens.refresh) {
-    const ok = await refreshTokens();
+  // Transparent refresh on 401 (coalesced across concurrent calls).
+  if (res.status === 401 && retry) {
+    const ok = await refreshSession();
     if (ok) return request<T>(path, options, false);
-    // Refresh failed → session is dead. Clear tokens and notify the app so
-    // authed screens can redirect to login instead of hanging on empty data.
-    tokens.clear();
+    // Session is dead → notify authed screens so they can redirect to login.
     if (typeof window !== 'undefined') window.dispatchEvent(new Event('auth-expired'));
   }
 
@@ -82,6 +49,14 @@ export const api = {
   patch: <T>(p: string, body?: unknown) =>
     request<T>(p, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined }),
   del: <T>(p: string) => request<T>(p, { method: 'DELETE' }),
+};
+
+/** Session helpers (cookie-based; the server clears the httpOnly cookies). */
+export const auth = {
+  logout: () =>
+    fetch(`${API_BASE}/auth/logout`, { method: 'POST', credentials: 'include' }).catch(
+      () => undefined,
+    ),
 };
 
 // Public tracking (no auth)

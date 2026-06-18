@@ -15,7 +15,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { api, tokens } from '@/lib/api';
+import { api, auth } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Logo } from '@/components/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -41,22 +41,35 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const pathname = usePathname();
   const router = useRouter();
   const [me, setMe] = useState<Me | null>(null);
+  const [ready, setReady] = useState(false); // true once auth is verified server-side
   // Mobile off-canvas sidebar state. On lg+ the sidebar is always visible and
   // this flag is ignored; below lg it slides the drawer in/out.
   const [navOpen, setNavOpen] = useState(false);
 
   useEffect(() => {
-    if (!tokens.access) {
-      router.replace('/login');
-      return;
-    }
-    api.get<Me>('/users/me').then(setMe).catch(() => undefined);
+    let cancelled = false;
+    // Verify the session against the server (httpOnly cookie) BEFORE rendering the
+    // admin shell — so unauthenticated users never see protected UI, and there's
+    // no JS-readable token to spoof.
+    api
+      .get<Me>('/users/me')
+      .then((m) => {
+        if (cancelled) return;
+        setMe(m);
+        setReady(true);
+      })
+      .catch(() => {
+        if (!cancelled) router.replace('/login');
+      });
 
     // If a session expires mid-use (refresh fails), redirect to login instead of
     // leaving the dashboard hanging on empty data.
     const onExpired = () => router.replace('/login');
     window.addEventListener('auth-expired', onExpired);
-    return () => window.removeEventListener('auth-expired', onExpired);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('auth-expired', onExpired);
+    };
   }, [router]);
 
   // Close the mobile drawer whenever the route changes (after tapping a link).
@@ -65,6 +78,15 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   }, [pathname]);
 
   const current = NAV.slice().reverse().find((n) => pathname.startsWith(n.href));
+
+  // Hold the admin shell until the session is verified (or redirect fires).
+  if (!ready) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 dark:bg-brand-950">
+        <span className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-brand dark:border-white/20 dark:border-t-white" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen bg-slate-50 dark:bg-brand-950">
@@ -133,8 +155,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </div>
             <button
               onClick={() => {
-                tokens.clear();
-                router.replace('/login');
+                auth.logout().finally(() => router.replace('/login'));
               }}
               title="Sign out"
               className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-white/10 dark:hover:text-slate-200"

@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { api, tokens } from '@/lib/api';
+import { api, auth } from '@/lib/api';
 import { Button, Card, Input, StatusBadge } from '@/components/ui';
 import { Logo } from '@/components/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -30,25 +30,24 @@ export default function PortalPage() {
     api
       .get<PortalOrder[]>('/portal/orders')
       .then((d) => {
-        setOrders(d);
+        setOrders(Array.isArray(d) ? d : []);
         setAuthed(true);
       })
       .catch(() => setAuthed(false));
   }
 
+  // Try loading on mount — if the auth cookie is valid we're in, otherwise the
+  // request 401s and we fall back to the login form.
   useEffect(() => {
-    if (tokens.access) loadOrders();
+    loadOrders();
   }, []);
 
   async function login(e: React.FormEvent) {
     e.preventDefault();
     setError('');
     try {
-      const res = await api.post<{ accessToken: string; refreshToken: string }>(
-        '/auth/customer/login',
-        { email, password },
-      );
-      tokens.set(res.accessToken, res.refreshToken);
+      // Server sets the httpOnly auth cookie on success.
+      await api.post('/auth/customer/login', { email, password });
       loadOrders();
     } catch (err: any) {
       setError(err.message);
@@ -99,8 +98,10 @@ export default function PortalPage() {
           <button
             className="text-sm text-slate-500 hover:underline dark:text-slate-400"
             onClick={() => {
-              tokens.clear();
-              setAuthed(false);
+              auth.logout().finally(() => {
+                setOrders([]);
+                setAuthed(false);
+              });
             }}
           >
             Sign out

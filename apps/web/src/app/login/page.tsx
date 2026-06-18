@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { api, tokens } from '@/lib/api';
+import { api } from '@/lib/api';
 import { Button, Card, Input } from '@/components/ui';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
@@ -21,11 +21,8 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      const res = await api.post<{ accessToken: string; refreshToken: string }>(
-        '/auth/staff/login',
-        { email, password },
-      );
-      tokens.set(res.accessToken, res.refreshToken);
+      // The server sets httpOnly auth cookies on success; nothing to store here.
+      await api.post('/auth/staff/login', { email, password });
       router.push('/admin');
     } catch (err: any) {
       setError(err.message);

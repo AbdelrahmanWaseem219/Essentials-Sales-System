@@ -45,6 +45,27 @@ async function bootstrap() {
   app.use('/webhooks', raw({ type: '*/*', limit: '5mb' }));
   app.use(json({ limit: '2mb' }));
 
+  // Minimal cookie parser (no extra dependency) — populates req.cookies so the
+  // JWT strategy and auth controller can read the httpOnly auth cookies.
+  app.use((req: any, _res: any, next: () => void) => {
+    const header: string | undefined = req.headers?.cookie;
+    req.cookies = {};
+    if (header) {
+      for (const part of header.split(';')) {
+        const i = part.indexOf('=');
+        if (i > 0) {
+          const k = part.slice(0, i).trim();
+          try {
+            req.cookies[k] = decodeURIComponent(part.slice(i + 1).trim());
+          } catch {
+            req.cookies[k] = part.slice(i + 1).trim();
+          }
+        }
+      }
+    }
+    next();
+  });
+
   app.use(helmet());
   app.enableCors({
     origin: (process.env.CORS_ORIGIN ?? 'http://localhost:3000').split(','),
