@@ -20,15 +20,23 @@ export default function CustomersPage() {
   const [rows, setRows] = useState<CustomerRow[]>([]);
 
   useEffect(() => {
+    let cancelled = false; // ignore a slow response superseded by newer typing
     const params = new URLSearchParams();
     if (search) params.set('search', search);
     const t = setTimeout(() => {
       api
         .get<{ data: CustomerRow[] }>(`/customers?${params}`)
-        .then((r) => setRows(r.data))
-        .catch(() => setRows([]));
+        .then((r) => {
+          if (!cancelled) setRows(Array.isArray(r?.data) ? r.data : []);
+        })
+        .catch(() => {
+          if (!cancelled) setRows([]);
+        });
     }, 250);
-    return () => clearTimeout(t);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
   }, [search]);
 
   return (
@@ -60,7 +68,7 @@ export default function CustomersPage() {
                 </td>
                 <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{c.email ?? '—'}</td>
                 <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{c.phone ?? '—'}</td>
-                <td className="px-4 py-3 text-slate-700 dark:text-slate-300">{c._count.orders}</td>
+                <td className="px-4 py-3 text-slate-700 dark:text-slate-300">{c._count?.orders ?? 0}</td>
                 <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{formatDate(c.createdAt)}</td>
               </tr>
             ))}

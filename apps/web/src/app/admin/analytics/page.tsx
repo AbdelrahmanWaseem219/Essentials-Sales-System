@@ -25,11 +25,27 @@ export default function AnalyticsPage() {
   const [topProducts, setTopProducts] = useState<any[]>([]);
 
   useEffect(() => {
-    api.get<any[]>('/analytics/revenue').then((d) =>
-      setRevenue(d.map((r) => ({ ...r, day: new Date(r.day).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) }))),
-    );
-    api.get<any[]>('/analytics/top-customers').then(setTopCustomers);
-    api.get<any[]>('/analytics/top-products').then(setTopProducts);
+    // Guard every call: a failed request or an unexpected (non-array) body must
+    // not throw an unhandled rejection or blank the page — just show empty.
+    api
+      .get<any[]>('/analytics/revenue')
+      .then((d) =>
+        setRevenue(
+          (Array.isArray(d) ? d : []).map((r) => ({
+            ...r,
+            day: new Date(r.day).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
+          })),
+        ),
+      )
+      .catch(() => setRevenue([]));
+    api
+      .get<any[]>('/analytics/top-customers')
+      .then((d) => setTopCustomers(Array.isArray(d) ? d : []))
+      .catch(() => setTopCustomers([]));
+    api
+      .get<any[]>('/analytics/top-products')
+      .then((d) => setTopProducts(Array.isArray(d) ? d : []))
+      .catch(() => setTopProducts([]));
   }, []);
 
   return (

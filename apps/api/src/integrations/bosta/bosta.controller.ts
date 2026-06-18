@@ -2,6 +2,7 @@ import { Controller, Headers, HttpCode, Post, Req } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
+import { timingSafeEqual } from 'crypto';
 import { Public } from '../../common/decorators/public.decorator';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ShipmentsService } from '../../shipments/shipments.service';
@@ -24,7 +25,14 @@ export class BostaController {
   @HttpCode(200)
   async handle(@Req() req: Request, @Headers('x-webhook-secret') secret: string) {
     const expected = this.config.get<string>('bosta.webhookSecret');
-    const valid = !expected || secret === expected;
+    // Verify the shared secret with a constant-time compare. If no secret is
+    // configured we FAIL CLOSED in production (an unauthenticated POST must not be
+    // able to mutate shipment/order state) but allow it in dev for convenience.
+    // Either way the Bosta poller keeps tracking current, so rejecting unsigned
+    // webhooks loses no functionality.
+    const valid = expected
+      ? !!secret && safeEqual(secret, expected)
+      : this.config.get<string>('env') !== 'production';
 
     // /webhooks routes receive a RAW Buffer body (main.ts mounts express.raw so
     // Shopify HMAC works). Bosta posts JSON, so parse the buffer ourselves —
@@ -63,4 +71,12 @@ export class BostaController {
     });
     return { ok: true };
   }
+}
+
+/** Length-safe constant-time string comparison. */
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
 }

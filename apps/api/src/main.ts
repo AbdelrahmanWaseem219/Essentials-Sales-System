@@ -18,7 +18,26 @@ process.on('uncaughtException', (err) => {
   console.error('[uncaughtException]', err);
 });
 
+// Fail fast in production if critical secrets are missing or left at dev defaults
+// — a missing JWT secret would let anyone forge an admin token. Dev is unaffected.
+function assertProductionSecrets() {
+  if ((process.env.NODE_ENV ?? 'development') !== 'production') return;
+  const problems: string[] = [];
+  if (!process.env.DATABASE_URL) problems.push('DATABASE_URL');
+  const acc = process.env.JWT_ACCESS_SECRET;
+  const ref = process.env.JWT_REFRESH_SECRET;
+  if (!acc || acc === 'dev-access' || acc.length < 16) problems.push('JWT_ACCESS_SECRET');
+  if (!ref || ref === 'dev-refresh' || ref.length < 16) problems.push('JWT_REFRESH_SECRET');
+  if (problems.length) {
+    throw new Error(
+      `Refusing to start in production: missing or weak ${problems.join(', ')}. ` +
+        'Set strong, unique values in the environment.',
+    );
+  }
+}
+
 async function bootstrap() {
+  assertProductionSecrets();
   const app = await NestFactory.create(AppModule, { rawBody: true });
   app.enableShutdownHooks(); // clean Prisma/Redis disconnect on SIGTERM/SIGINT
 

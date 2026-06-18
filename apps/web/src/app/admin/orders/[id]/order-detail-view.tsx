@@ -31,11 +31,23 @@ export default function OrderDetailView() {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
 
+  // Manual reload used after an action (approve/ship/…); user-initiated, no race.
   const load = useCallback(() => {
     api.get<OrderDetail>(`/orders/${id}`).then(setOrder).catch((e) => setError(e.message));
   }, [id]);
 
-  useEffect(load, [load]);
+  // Initial / id-change load, guarded so a slow response for a previous id (or an
+  // unmounted view) can't overwrite newer state.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .get<OrderDetail>(`/orders/${id}`)
+      .then((d) => !cancelled && setOrder(d))
+      .catch((e) => !cancelled && setError(e.message));
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
 
   async function act(action: string, body?: unknown) {
     setBusy(action);

@@ -23,6 +23,34 @@ export const tokens = {
   },
 };
 
+// Single in-flight refresh shared by all callers. Without this, several parallel
+// requests (e.g. the dashboard's 4 concurrent fetches) each hit a 401 and each POST
+// the SAME refresh token; rotation invalidates it after the first, so the rest fail
+// and spuriously log the user out. Coalescing into one promise fixes that race.
+let refreshPromise: Promise<boolean> | null = null;
+
+function refreshTokens(): Promise<boolean> {
+  if (refreshPromise) return refreshPromise;
+  const rt = tokens.refresh;
+  if (!rt) return Promise.resolve(false);
+  refreshPromise = fetch(`${API_BASE}/auth/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refreshToken: rt }),
+  })
+    .then(async (r) => {
+      if (!r.ok) return false;
+      const data = await r.json();
+      tokens.set(data.accessToken, data.refreshToken);
+      return true;
+    })
+    .catch(() => false)
+    .finally(() => {
+      refreshPromise = null;
+    });
+  return refreshPromise;
+}
+
 async function request<T>(path: string, options: RequestInit = {}, retry = true): Promise<T> {
   const headers = new Headers(options.headers);
   headers.set('Content-Type', 'application/json');
@@ -30,18 +58,10 @@ async function request<T>(path: string, options: RequestInit = {}, retry = true)
 
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
 
-  // Transparent refresh-token rotation on 401.
+  // Transparent refresh-token rotation on 401 (coalesced across concurrent calls).
   if (res.status === 401 && retry && tokens.refresh) {
-    const refreshed = await fetch(`${API_BASE}/auth/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken: tokens.refresh }),
-    });
-    if (refreshed.ok) {
-      const data = await refreshed.json();
-      tokens.set(data.accessToken, data.refreshToken);
-      return request<T>(path, options, false);
-    }
+    const ok = await refreshTokens();
+    if (ok) return request<T>(path, options, false);
     // Refresh failed → session is dead. Clear tokens and notify the app so
     // authed screens can redirect to login instead of hanging on empty data.
     tokens.clear();

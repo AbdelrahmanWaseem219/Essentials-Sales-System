@@ -55,9 +55,15 @@ export class OrderIngestionService {
     // 1. Upsert customer
     const customer = await this.upsertCustomer(o.customer);
 
-    // 2. Upsert address (best-effort)
-    let shippingAddressId: string | undefined;
-    if (o.shippingAddress) {
+    // 2. Address — reuse the order's existing address if it already has one, so a
+    //    repeated orders/updated webhook doesn't create a duplicate Address row
+    //    every time. Only create a new one when the order has none yet.
+    const existingOrder = await this.prisma.order.findUnique({
+      where: { shopifyOrderId: o.externalOrderId },
+      select: { shippingAddressId: true },
+    });
+    let shippingAddressId: string | undefined = existingOrder?.shippingAddressId ?? undefined;
+    if (o.shippingAddress && !shippingAddressId) {
       const addr = await this.prisma.address.create({
         data: {
           customerId: customer.id,
@@ -101,6 +107,7 @@ export class OrderIngestionService {
       where: { shopifyOrderId: o.externalOrderId },
       update: {
         // On orders/updated we refresh totals + payment, never downgrade workflow status.
+        shippingAddressId, // link the address (reused or newly created); never duplicates
         subtotal: new Prisma.Decimal(o.totals.subtotal),
         shippingTotal: new Prisma.Decimal(o.totals.shipping),
         discountTotal: new Prisma.Decimal(o.totals.discount),

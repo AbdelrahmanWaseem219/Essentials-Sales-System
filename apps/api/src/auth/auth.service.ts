@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Role } from '@prisma/client';
@@ -15,6 +15,8 @@ export interface TokenPair {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
@@ -66,7 +68,27 @@ export class AuthService {
   async refresh(rawToken: string, meta: { ip?: string; userAgent?: string }) {
     const tokenHash = this.hash(rawToken);
     const stored = await this.prisma.refreshToken.findUnique({ where: { tokenHash } });
-    if (!stored || stored.revokedAt || stored.expiresAt < new Date()) {
+    if (!stored || stored.expiresAt < new Date()) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+    // Reuse detection: a token that's already been rotated (revoked + replacedBy)
+    // is being replayed → likely theft. Revoke the entire token family for that
+    // principal so the attacker AND the legitimate session must re-authenticate.
+    if (stored.revokedAt) {
+      if (stored.replacedBy) {
+        const familyWhere = stored.userId
+          ? { userId: stored.userId }
+          : { customerId: stored.customerId! };
+        await this.prisma.refreshToken.updateMany({
+          where: { ...familyWhere, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+        this.logger.warn(
+          `Refresh-token reuse detected — revoked token family for ${
+            stored.userId ? 'user ' + stored.userId : 'customer ' + stored.customerId
+          }`,
+        );
+      }
       throw new UnauthorizedException('Invalid refresh token');
     }
     // rotate: revoke old, issue new

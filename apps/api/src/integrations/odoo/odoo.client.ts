@@ -96,7 +96,7 @@ export class OdooClient {
       msg.includes('session_expired') ||
       msg.includes('access denied') ||
       msg.includes('expired') ||
-      msg.includes('invalid') && msg.includes('session')
+      (msg.includes('invalid') && msg.includes('session'))
     );
   }
 

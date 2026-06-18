@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { OrderStatus, ShipmentStatus } from '@prisma/client';
+import { OrderStatus, Prisma, ShipmentStatus } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RealtimeService } from '../common/realtime/realtime.service';
 import { BostaClient } from '../integrations/bosta/bosta.client';
@@ -95,7 +95,7 @@ export class ShipmentsService {
     }
 
     // COD amount: collect the balance still owed (0 if already fully paid online).
-    const owed = await this.outstandingAmount(order.id, Number(order.grandTotal));
+    const owed = await this.outstandingAmount(order.id, order.grandTotal);
 
     let delivery;
     try {
@@ -368,13 +368,19 @@ export class ShipmentsService {
   }
 
   /** Amount still to collect on delivery = grand total − sum paid. */
-  private async outstandingAmount(orderId: string, grandTotal: number): Promise<number> {
+  /** Amount still to collect on delivery = grandTotal − sum(amountPaid).
+   *  Done in Decimal to avoid float rounding on the money Bosta collects (COD). */
+  private async outstandingAmount(
+    orderId: string,
+    grandTotal: Prisma.Decimal,
+  ): Promise<number> {
     const agg = await this.prisma.payment.aggregate({
       where: { orderId },
       _sum: { amountPaid: true },
     });
-    const paid = Number(agg._sum.amountPaid ?? 0);
-    return Math.max(0, grandTotal - paid);
+    const paid = new Prisma.Decimal(agg._sum.amountPaid ?? 0);
+    const owed = new Prisma.Decimal(grandTotal).minus(paid);
+    return owed.greaterThan(0) ? owed.toNumber() : 0;
   }
 
   async getByOrder(orderId: string) {
