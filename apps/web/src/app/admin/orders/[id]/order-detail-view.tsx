@@ -4,7 +4,17 @@ import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { Button, Card, StatusBadge } from '@/components/ui';
+import { useToast } from '@/components/toast';
 import { formatDate, formatMoney } from '@/lib/utils';
+
+const ACTION_LABEL: Record<string, string> = {
+  approve: 'Order approved',
+  reject: 'Order rejected',
+  ship: 'Bosta shipment created',
+  hold: 'Order put on hold',
+  release: 'Order released',
+  cancel: 'Order cancelled',
+};
 
 interface OrderDetail {
   id: string;
@@ -27,6 +37,7 @@ interface OrderDetail {
 
 export default function OrderDetailView() {
   const { id } = useParams<{ id: string }>();
+  const toast = useToast();
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -59,8 +70,10 @@ export default function OrderDetailView() {
         await api.post(`/orders/${id}/${action}`, body);
       }
       load();
+      toast(ACTION_LABEL[action] ?? 'Done');
     } catch (e: any) {
       setError(e.message);
+      toast(e.message ?? 'Action failed', 'error');
     } finally {
       setBusy('');
     }

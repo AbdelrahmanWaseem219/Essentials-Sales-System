@@ -19,6 +19,7 @@ import { api, tokens } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Logo } from '@/components/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { ToastProvider } from '@/components/toast';
 
 const NAV = [
   { href: '/admin', label: 'Dashboard', icon: LayoutDashboard },
@@ -172,7 +173,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <ThemeToggle />
           </div>
         </header>
-        <main className="flex-1 animate-fade-in px-4 py-6 sm:px-8 sm:py-7">{children}</main>
+        <main className="flex-1 animate-fade-in px-4 py-6 sm:px-8 sm:py-7">
+          <ToastProvider>{children}</ToastProvider>
+        </main>
       </div>
     </div>
   );

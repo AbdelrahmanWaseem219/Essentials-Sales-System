@@ -36,6 +36,20 @@ export function Button({
   );
 }
 
+/** Small inline loading spinner (inherits text color via border-current). */
+export function Spinner({ className }: { className?: string }) {
+  return (
+    <span
+      role="status"
+      aria-label="Loading"
+      className={cn(
+        'inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent',
+        className,
+      )}
+    />
+  );
+}
+
 export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
