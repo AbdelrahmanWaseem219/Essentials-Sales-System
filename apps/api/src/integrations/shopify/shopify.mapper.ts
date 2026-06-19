@@ -3,9 +3,7 @@ import { NormalizedOrder } from '../../orders/order-ingestion.service';
 
 /** Map a Shopify order webhook payload to our normalized order shape. */
 export function mapShopifyOrder(p: any): NormalizedOrder {
-  const gateway = (p.payment_gateway_names?.[0] ?? '').toLowerCase();
-  const isCod = gateway.includes('cash') || gateway.includes('cod');
-
+  // Prepaid-only brand: all orders are paid online (card), never cash-on-delivery.
   const financial = p.financial_status as string; // paid | pending | partially_paid | refunded ...
   const paymentStatus: PaymentStatus =
     financial === 'paid'
@@ -66,7 +64,7 @@ export function mapShopifyOrder(p: any): NormalizedOrder {
       grand,
     },
     payment: {
-      method: isCod ? PaymentMethod.COD : PaymentMethod.CARD,
+      method: PaymentMethod.CARD, // prepaid only
       status: paymentStatus,
       amount: grand,
       paid,

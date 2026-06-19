@@ -97,8 +97,10 @@ export class OrderIngestionService {
       });
     }
 
+    // Prepaid only: an unpaid order waits for payment; everything else is ready
+    // for review.
     const status =
-      o.payment.status === PaymentStatus.PENDING && o.payment.method !== PaymentMethod.COD
+      o.payment.status === PaymentStatus.PENDING
         ? OrderStatus.PAYMENT_PENDING
         : OrderStatus.PENDING_REVIEW;
 
@@ -145,9 +147,8 @@ export class OrderIngestionService {
       include: { items: true, payments: true },
     });
 
-    // Keep the payment record in sync on orders/updated — otherwise an order paid
-    // AFTER creation keeps amountPaid=0 and Bosta would later be told to collect
-    // the full amount as COD on an already-paid order (double charge).
+    // Keep the payment record in sync on orders/updated so amountPaid always
+    // reflects the latest Shopify payment status (orders are prepaid online).
     if (order.payments?.length) {
       const payment = order.payments[0];
       await this.prisma.payment.update({
