@@ -46,29 +46,64 @@ export class BostaController {
     }
 
     const trackingNumber = body?.trackingNumber ?? body?.data?.trackingNumber;
-    await this.prisma.webhookEvent
+    const stateRaw = body?.state ?? body?.data?.state;
+
+    // Bosta sends MANY delivery/update events for the same tracking number — one per
+    // status change (picked up → in transit → out for delivery → delivered). Deduping
+    // on the tracking number alone would drop every status after the first, so we key
+    // the audit row on trackingNumber + state. Distinct statuses each get recorded once;
+    // an exact duplicate (e.g. webhook and poller both report "delivered") is deduped.
+    const stateKey =
+      stateRaw == null
+        ? ''
+        : typeof stateRaw === 'object'
+          ? String(stateRaw.code ?? stateRaw.value ?? '')
+          : String(stateRaw);
+    const externalId = trackingNumber ? `${trackingNumber}:${stateKey}` : null;
+
+    const event = await this.prisma.webhookEvent
       .create({
         data: {
           provider: 'BOSTA',
           topic: 'delivery/update',
-          externalId: trackingNumber ?? null,
+          externalId,
           payload: body,
           hmacValid: valid,
         },
       })
-      .catch(() => null);
+      .catch(() => null); // unique violation = a delivery/state we already recorded
 
     if (!valid) return { ok: true };
 
-    await this.shipments.applyTrackingUpdate({
-      trackingNumber,
-      bostaDeliveryId: body?._id ?? body?.data?._id,
-      state: body?.state ?? body?.data?.state,
-      location:
-        body?.currentLocation ?? body?.data?.currentLocation ?? body?.state?.value ?? undefined,
-      occurredAt: body?.timestamp ? new Date(body.timestamp) : new Date(),
-      raw: body,
-    });
+    // Apply the tracking update even on a duplicate audit row — applyTrackingUpdate is
+    // idempotent (it only notifies on a real status change). Then mark the audit row
+    // processed (or record the error), mirroring the Shopify handler.
+    try {
+      await this.shipments.applyTrackingUpdate({
+        trackingNumber,
+        bostaDeliveryId: body?._id ?? body?.data?._id,
+        state: stateRaw,
+        location:
+          body?.currentLocation ?? body?.data?.currentLocation ?? body?.state?.value ?? undefined,
+        occurredAt: body?.timestamp ? new Date(body.timestamp) : new Date(),
+        raw: body,
+      });
+      if (event) {
+        await this.prisma.webhookEvent.update({
+          where: { id: event.id },
+          data: { processedAt: new Date(), attempts: { increment: 1 } },
+        });
+      }
+    } catch (e: any) {
+      if (event) {
+        await this.prisma.webhookEvent
+          .update({
+            where: { id: event.id },
+            data: { error: e?.message ?? 'processing failed', attempts: { increment: 1 } },
+          })
+          .catch(() => null);
+      }
+    }
     return { ok: true };
   }
 }
