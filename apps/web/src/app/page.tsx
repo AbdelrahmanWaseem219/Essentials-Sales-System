@@ -97,8 +97,11 @@ export default function Home() {
       </section>
 
       {/* Footer */}
-      <footer className="relative z-10 border-t border-white/5 py-6 text-center text-xs tracking-wide text-white/30">
-        © Essentials Egypt · Sales Management System
+      <footer className="relative z-10 flex flex-col items-center gap-2 border-t border-white/5 py-6 text-center text-xs tracking-wide text-white/30">
+        <span>© Essentials Egypt · Sales Management System</span>
+        <Link href="/status" className="text-white/40 transition hover:text-white/70">
+          System status
+        </Link>
       </footer>
     </main>
   );
