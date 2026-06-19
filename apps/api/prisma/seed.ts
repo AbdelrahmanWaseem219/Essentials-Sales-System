@@ -64,7 +64,14 @@ async function main() {
           ],
         },
         payments: {
-          create: { method: PaymentMethod.COD, status: PaymentStatus.PENDING, amount: 500, currency: 'EGP' },
+          create: {
+            method: PaymentMethod.CARD, // prepaid-only brand
+            status: PaymentStatus.PAID,
+            amount: 500,
+            amountPaid: 500,
+            currency: 'EGP',
+            paidAt: new Date(),
+          },
         },
         events: { create: { type: 'CREATED', message: 'Seed order' } },
       },

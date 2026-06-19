@@ -64,7 +64,7 @@ model RefreshToken {
 
 model Customer {
   id            String   @id @default(cuid())
-  // Customer portal auth (optional — many COD customers never log in)
+  // Customer portal auth (optional — a customer may order without ever logging in)
   email         String?  @unique
   passwordHash  String?
   phone         String?
@@ -277,7 +277,7 @@ model Payment {
   id        String        @id @default(cuid())
   orderId   String
   order     Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  method    PaymentMethod @default(COD)
+  method    PaymentMethod @default(CARD) // prepaid-only brand: orders are paid online
   status    PaymentStatus @default(PENDING)
   amount    Decimal       @db.Decimal(12, 2)
   amountPaid Decimal      @default(0) @db.Decimal(12, 2)

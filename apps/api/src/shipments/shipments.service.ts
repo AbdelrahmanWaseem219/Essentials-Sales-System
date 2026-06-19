@@ -364,7 +364,7 @@ export class ShipmentsService {
     return `${this.config.get('publicBaseUrl')}/track?token=${publicToken}`;
   }
 
-  /** Amount still to collect on delivery = grand total − sum paid. */
+  /** All shipments for an order, with their tracking events oldest-first. */
   async getByOrder(orderId: string) {
     return this.prisma.shipment.findMany({
       where: { orderId },
