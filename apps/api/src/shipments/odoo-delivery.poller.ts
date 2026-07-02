@@ -14,6 +14,8 @@ import { ShipmentsService } from './shipments.service';
 export class OdooDeliveryPoller implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(OdooDeliveryPoller.name);
   private readonly seconds: number;
+  private readonly mode: 'db' | 'odoo';
+  private readonly dryRun: boolean;
   private timer?: NodeJS.Timeout;
   private running = false;
 
@@ -22,6 +24,8 @@ export class OdooDeliveryPoller implements OnModuleInit, OnModuleDestroy {
     config: ConfigService,
   ) {
     this.seconds = config.get<number>('odoo.pollSeconds') ?? 0;
+    this.mode = config.get<'db' | 'odoo'>('odoo.shipMode') ?? 'db';
+    this.dryRun = config.get<boolean>('odoo.autoshipDryRun') ?? false;
   }
 
   onModuleInit() {
@@ -29,7 +33,8 @@ export class OdooDeliveryPoller implements OnModuleInit, OnModuleDestroy {
       this.logger.log('Odoo delivery polling disabled (ODOO_POLL_SECONDS=0)');
       return;
     }
-    this.logger.log(`Odoo delivery polling every ${this.seconds}s`);
+    const suffix = this.mode === 'odoo' ? (this.dryRun ? ' [mode=odoo, DRY RUN]' : ' [mode=odoo]') : '';
+    this.logger.log(`Odoo delivery polling every ${this.seconds}s${suffix}`);
     this.timer = setInterval(() => this.tick(), this.seconds * 1000);
   }
 
@@ -41,7 +46,13 @@ export class OdooDeliveryPoller implements OnModuleInit, OnModuleDestroy {
     if (this.running) return; // avoid overlap on slow Odoo calls
     this.running = true;
     try {
-      await this.shipments.syncValidatedDeliveries();
+      if (this.mode === 'odoo') {
+        // Synco / Odoo-native: watch any validated delivery in Odoo.
+        await this.shipments.syncValidatedOdooDeliveries();
+      } else {
+        // Legacy: watch orders we pushed to Odoo ourselves.
+        await this.shipments.syncValidatedDeliveries();
+      }
     } catch (e: any) {
       this.logger.error(`Delivery poll failed: ${e.message}`);
     } finally {

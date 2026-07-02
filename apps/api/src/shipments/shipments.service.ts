@@ -6,7 +6,7 @@ import { RealtimeService } from '../common/realtime/realtime.service';
 import { BostaClient } from '../integrations/bosta/bosta.client';
 import { mapBostaState } from '../integrations/bosta/bosta.mapper';
 import { ShopifyService } from '../integrations/shopify/shopify.service';
-import { OdooService } from '../integrations/odoo/odoo.service';
+import { OdooService, OdooDeliveryShipInfo } from '../integrations/odoo/odoo.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OrderWorkflowService } from '../orders/workflow/order-workflow.service';
 
@@ -65,6 +65,170 @@ export class ShipmentsService {
         this.logger.error(`Auto-ship ${o.orderNumber} failed: ${e.message}`),
       );
     }
+  }
+
+  /**
+   * Synco / Odoo-native auto-shipping (ODOO_SHIP_MODE=odoo).
+   *
+   * Unlike syncValidatedDeliveries (which only watches orders WE pushed), this
+   * watches ANY validated outgoing delivery in Odoo — including ones created by a
+   * Synco-imported sale order — pulls the address from Odoo, and auto-creates the
+   * Bosta label. A synced order has no Order row in our DB, so we mint a lightweight
+   * one (customer + address + order) keyed by the Odoo picking id, then reuse the
+   * tested createForOrder() path (Bosta + shipment + tracking).
+   *
+   * Skips: self-delivery-tagged orders, and orders missing a shippable address.
+   * Dedup: an Order already exists for the picking (retry only if it has no shipment yet).
+   */
+  async syncValidatedOdooDeliveries() {
+    const dryRun = this.config.get<boolean>('odoo.autoshipDryRun') ?? false;
+    const selfTag = (this.config.get<string>('odoo.selfDeliveryTag') ?? 'Self-delivery')
+      .trim()
+      .toLowerCase();
+
+    const deliveries = await this.odoo.listValidatedDeliveries(100);
+    if (!deliveries.length) return;
+
+    // Batch-dedup: which of these pickings do we already have an order for?
+    const pickingIds = deliveries.map((d) => d.id);
+    const known = await this.prisma.order.findMany({
+      where: { odooPickingId: { in: pickingIds } },
+      select: { id: true, odooPickingId: true, shipments: { select: { id: true }, take: 1 } },
+    });
+    const knownByPicking = new Map(known.map((o) => [o.odooPickingId!, o]));
+
+    for (const d of deliveries) {
+      const existing = knownByPicking.get(d.id);
+      if (existing?.shipments.length) continue; // already shipped — nothing to do
+
+      const info = await this.odoo.getDeliveryShipInfo(d.id).catch((e) => {
+        this.logger.warn(`Odoo delivery ${d.name}: could not read ship info: ${e.message}`);
+        return null;
+      });
+      if (!info) continue;
+
+      // Self-delivery orders are handled by the business — never courier-ship them.
+      if (info.tags.some((t) => t.trim().toLowerCase() === selfTag)) {
+        this.logger.log(`Odoo delivery ${info.pickingName} tagged self-delivery — skipping Bosta`);
+        continue;
+      }
+
+      const missing = this.missingShipFields(info);
+      if (missing.length) {
+        this.logger.warn(
+          `Odoo delivery ${info.pickingName}: cannot auto-ship (missing ${missing.join(', ')}) — skipping`,
+        );
+        continue;
+      }
+
+      if (dryRun) {
+        const p = info.partner!;
+        this.logger.log(
+          `[DRY RUN] Would Bosta-ship ${info.saleName ?? info.pickingName}: ` +
+            `${p.name} / ${p.phone} / ${p.city} / ${p.street}${p.street2 ? `, ${p.street2}` : ''}`,
+        );
+        continue;
+      }
+
+      // Existing order but no shipment yet (a prior attempt failed) → retry ship.
+      if (existing) {
+        await this.createForOrder(existing.id).catch((e) =>
+          this.logger.error(`Retry auto-ship ${info.pickingName} failed: ${e.message}`),
+        );
+        continue;
+      }
+
+      await this.autoShipOdooDelivery(info).catch((e) =>
+        this.logger.error(`Auto-ship ${info.pickingName} failed: ${e.message}`),
+      );
+    }
+  }
+
+  /** Bosta needs at least a name + phone + city + one address line. */
+  private missingShipFields(info: OdooDeliveryShipInfo): string[] {
+    const p = info.partner;
+    const missing: string[] = [];
+    if (!p) return ['customer'];
+    if (!p.phone) missing.push('phone');
+    if (!p.city) missing.push('city');
+    if (!p.street) missing.push('address');
+    return missing;
+  }
+
+  /** Mint a lightweight order from Odoo delivery data, then create the Bosta label. */
+  private async autoShipOdooDelivery(info: OdooDeliveryShipInfo) {
+    const p = info.partner!;
+    const [firstName, ...rest] = p.name.trim().split(/\s+/);
+    const lastName = rest.join(' ') || null;
+
+    const customer = await this.upsertCustomerFromOdoo({
+      email: p.email,
+      phone: p.phone,
+      firstName: firstName || p.name,
+      lastName,
+    });
+
+    const address = await this.prisma.address.create({
+      data: {
+        customerId: customer.id,
+        firstName: firstName || p.name,
+        lastName,
+        phone: p.phone,
+        line1: p.street!,
+        line2: p.street2 ?? null,
+        city: p.city!,
+        country: 'EG',
+      },
+    });
+
+    const order = await this.prisma.order.create({
+      data: {
+        orderNumber: info.saleName ?? info.pickingName ?? `ODOO-${info.pickingId}`,
+        source: 'SHOPIFY',
+        status: OrderStatus.PROCESSING,
+        customerId: customer.id,
+        shippingAddressId: address.id,
+        currency: 'EGP',
+        subtotal: info.amountUntaxed || 0,
+        grandTotal: info.amountTotal || 0,
+        // Do NOT set shopifyOrderId — the connector owns Shopify fulfillment, so
+        // createForOrder must not also try to fulfill in Shopify. Keep the ref for humans.
+        shopifyOrderName: info.clientOrderRef ?? undefined,
+        odooPickingId: info.pickingId,
+        odooPushedAt: new Date(),
+        placedAt: new Date(),
+      },
+    });
+
+    this.logger.log(
+      `Odoo delivery ${info.pickingName} validated → creating Bosta shipment for ${order.orderNumber}`,
+    );
+    await this.createForOrder(order.id);
+  }
+
+  /** Find a customer by email/phone, else create one — from Odoo contact data. */
+  private async upsertCustomerFromOdoo(c: {
+    email: string | null;
+    phone: string | null;
+    firstName: string;
+    lastName: string | null;
+  }) {
+    if (c.email) {
+      const byEmail = await this.prisma.customer.findUnique({ where: { email: c.email } });
+      if (byEmail) return byEmail;
+    }
+    if (c.phone) {
+      const byPhone = await this.prisma.customer.findFirst({ where: { phone: c.phone } });
+      if (byPhone) return byPhone;
+    }
+    return this.prisma.customer.create({
+      data: {
+        email: c.email ?? null,
+        phone: c.phone ?? null,
+        firstName: c.firstName,
+        lastName: c.lastName,
+      },
+    });
   }
 
   /** Create a Bosta shipment for an order, then mark the order SHIPPED.

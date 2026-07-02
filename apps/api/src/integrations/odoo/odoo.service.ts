@@ -45,6 +45,30 @@ interface PushPartner {
   city?: string | null;
 }
 
+/** Everything needed to auto-create a Bosta label from a validated Odoo delivery. */
+export interface OdooDeliveryShipInfo {
+  pickingId: number;
+  pickingName: string;
+  origin: string | null;
+  saleName: string | null;
+  clientOrderRef: string | null; // Shopify order reference carried by the connector
+  tags: string[]; // sale-order tags (e.g. 'Self-delivery')
+  amountTotal: number;
+  amountUntaxed: number;
+  partner: {
+    name: string;
+    phone: string | null;
+    email: string | null;
+    street: string | null;
+    street2: string | null;
+    city: string | null;
+  } | null;
+}
+
+/** Odoo returns `false` for empty char/text fields — coerce to a real string|null. */
+const str = (v: unknown): string | null =>
+  typeof v === 'string' && v.trim().length ? v : null;
+
 /**
  * Inventory-only Odoo operations. Reads catalog/stock/warehouses and writes
  * approved orders as OUTGOING stock pickings (deliveries) — never sale.order.
@@ -358,6 +382,126 @@ export class OdooService {
       { limit: 1 },
     );
     return p?.state ?? null;
+  }
+
+  // ── Reads for Synco/Odoo-native auto-shipping ───────
+  // These let us watch deliveries Odoo created (e.g. from a Synco-imported sale
+  // order) — not just ones we pushed ourselves — so validating the final Ship
+  // step can auto-create the Bosta label. See ShipmentsService.syncValidatedOdooDeliveries.
+
+  /**
+   * List validated (state = 'done') OUTGOING delivery pickings — the final Ship
+   * step of a delivery (WH/OUT), never the internal Pick/Pack transfers.
+   * Newest first; caller dedups against already-shipped ones.
+   */
+  async listValidatedDeliveries(limit = 100): Promise<{ id: number; name: string }[]> {
+    return this.odoo.searchRead<{ id: number; name: string }>(
+      'stock.picking',
+      [
+        ['picking_type_id.code', '=', 'outgoing'],
+        ['state', '=', 'done'],
+      ],
+      ['id', 'name'],
+      { limit, order: 'id desc' },
+    );
+  }
+
+  /**
+   * Gather everything needed to raise a Bosta label for one done delivery:
+   * the customer's address/phone (res.partner), and — via the linked sale order —
+   * its tags (for the self-delivery skip), Shopify reference, and totals.
+   */
+  async getDeliveryShipInfo(pickingId: number): Promise<OdooDeliveryShipInfo | null> {
+    const [pick] = await this.odoo.searchRead<{
+      id: number;
+      name: string;
+      origin: string | false;
+      partner_id: [number, string] | false;
+      sale_id: [number, string] | false;
+    }>(
+      'stock.picking',
+      [['id', '=', pickingId]],
+      ['id', 'name', 'origin', 'partner_id', 'sale_id'],
+      { limit: 1 },
+    );
+    if (!pick) return null;
+
+    // Delivery address + phone from the contact.
+    let partner: OdooDeliveryShipInfo['partner'] = null;
+    if (Array.isArray(pick.partner_id)) {
+      const [p] = await this.odoo.searchRead<{
+        name: string;
+        phone: string | false;
+        mobile: string | false;
+        email: string | false;
+        street: string | false;
+        street2: string | false;
+        city: string | false;
+      }>(
+        'res.partner',
+        [['id', '=', pick.partner_id[0]]],
+        ['name', 'phone', 'mobile', 'email', 'street', 'street2', 'city'],
+        { limit: 1 },
+      );
+      if (p) {
+        partner = {
+          name: str(p.name) ?? 'Customer',
+          phone: str(p.phone) ?? str(p.mobile),
+          email: str(p.email),
+          street: str(p.street),
+          street2: str(p.street2),
+          city: str(p.city),
+        };
+      }
+    }
+
+    // Sale-order-level info: tags (self-delivery), Shopify ref, totals.
+    let saleName: string | null = null;
+    let clientOrderRef: string | null = null;
+    let tags: string[] = [];
+    let amountTotal = 0;
+    let amountUntaxed = 0;
+    if (Array.isArray(pick.sale_id)) {
+      const [so] = await this.odoo.searchRead<{
+        name: string | false;
+        client_order_ref: string | false;
+        tag_ids: number[] | false;
+        amount_total: number | false;
+        amount_untaxed: number | false;
+      }>(
+        'sale.order',
+        [['id', '=', pick.sale_id[0]]],
+        ['name', 'client_order_ref', 'tag_ids', 'amount_total', 'amount_untaxed'],
+        { limit: 1 },
+      );
+      if (so) {
+        saleName = str(so.name);
+        clientOrderRef = str(so.client_order_ref);
+        amountTotal = typeof so.amount_total === 'number' ? so.amount_total : 0;
+        amountUntaxed = typeof so.amount_untaxed === 'number' ? so.amount_untaxed : 0;
+        const tagIds = Array.isArray(so.tag_ids) ? so.tag_ids : [];
+        if (tagIds.length) {
+          const tagRows = await this.odoo.searchRead<{ name: string }>(
+            'crm.tag',
+            [['id', 'in', tagIds]],
+            ['name'],
+          );
+          tags = tagRows.map((t) => t.name).filter((n): n is string => typeof n === 'string');
+        }
+      }
+    }
+
+    return {
+      pickingId: pick.id,
+      pickingName: pick.name,
+      origin: str(pick.origin),
+      saleName,
+      clientOrderRef,
+      tags,
+      amountTotal,
+      amountUntaxed,
+      partner,
+    };
   }
 
   // ── private helpers ─────────────────────────────────

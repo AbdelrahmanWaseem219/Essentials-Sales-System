@@ -30,6 +30,17 @@ export default () => ({
     password: process.env.ODOO_PASSWORD ?? '',
     cacheTtl: parseInt(process.env.ODOO_CACHE_TTL ?? '300', 10),
     pollSeconds: parseInt(process.env.ODOO_POLL_SECONDS ?? '0', 10),
+    // Where validated deliveries come from:
+    //  'db'   → legacy: watch orders WE pushed to Odoo (custom-app-mastered orders)
+    //  'odoo' → Synco/Odoo-native: watch ANY validated outgoing delivery in Odoo,
+    //           pull the address from Odoo, and auto-create the Bosta label.
+    shipMode: (process.env.ODOO_SHIP_MODE ?? 'db') as 'db' | 'odoo',
+    // When true, the 'odoo' mode only LOGS what it would ship (address + payload)
+    // and never calls Bosta / writes records — use to verify mapping first.
+    autoshipDryRun: (process.env.ODOO_AUTOSHIP_DRY_RUN ?? 'false') === 'true',
+    // Odoo sale-order tag that marks an order the business delivers itself
+    // (skip Bosta). Matches case-insensitively.
+    selfDeliveryTag: process.env.ODOO_SELF_DELIVERY_TAG ?? 'Self-delivery',
   },
   bosta: {
     baseUrl: process.env.BOSTA_BASE_URL ?? 'https://app.bosta.co/api/v2',
